@@ -7,6 +7,7 @@ import (
 	//"html"
 	"net/http"
 	"strconv"
+	"time"
 )
 
 type Response struct {
@@ -16,6 +17,18 @@ type Response struct {
 	Answer float64 `json:"answer"`
 	Cached bool    `json:"cached"`
 }
+
+type CacheEntry struct {
+	Answer float64
+	Time time.Time
+}
+
+// Must be a pointer to CacheEntry, or the CacheEntry will be unaddressable.
+// And if it's unaddressable, then the timestamp can't be updated without
+// assigning a new CacheEntry to the map's key.
+type CacheMap map[string]*CacheEntry
+
+var cache CacheMap
 
 func getXY(r *http.Request) (float64, float64, error) {
 	r.ParseForm()
@@ -50,17 +63,45 @@ func doMath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var answer float64
+	reqString := fmt.Sprintf("%s;%v;%v", op, x, y)
 
-	switch op {
-	case "add":
-		answer = x + y
-	case "subtract":
-		answer = x - y
-	case "multiply":
-		answer = x * y
-	case "divide":
-		answer = x / y
+	var answer float64
+	now := time.Now()
+
+	expireTime := now.Add(time.Second * -60)
+
+	// TODO: use a linked list to make cache cleanup an O(1) operation
+	fmt.Println("\ncache:")
+	for key, value := range cache {
+		deleteIt := false
+		if value.Time.Before(expireTime) {
+			deleteIt = true
+			delete(cache, key)
+		}
+
+		fmt.Println(key, value, deleteIt)
+	}
+
+	cacheItem, exists := cache[reqString]
+
+	if exists {
+		answer = cacheItem.Answer
+		fmt.Printf("Age: %fs\n", float32(now.Sub(cacheItem.Time)) / float32(time.Second))
+		cacheItem.Time = now
+	} else {
+
+		switch op {
+		case "add":
+			answer = x + y
+		case "subtract":
+			answer = x - y
+		case "multiply":
+			answer = x * y
+		case "divide":
+			answer = x / y
+		}
+
+		cache[reqString] = &CacheEntry{answer, now}
 	}
 
 	data := Response{
@@ -68,7 +109,7 @@ func doMath(w http.ResponseWriter, r *http.Request) {
 		X:      x,
 		Y:      y,
 		Answer: answer,
-		Cached: false,
+		Cached: exists,
 	}
 
 	ret, err := json.Marshal(data)
@@ -83,6 +124,7 @@ func doMath(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	cache = CacheMap{}
 	fmt.Println("Running web server on port 8080")
 
 	http.HandleFunc("/add", doMath)
