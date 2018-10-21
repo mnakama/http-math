@@ -28,7 +28,57 @@ type CacheEntry struct {
 // assigning a new CacheEntry to the map's key.
 type CacheMap map[string]*CacheEntry
 
-var cache CacheMap
+type Cache struct {
+	hash CacheMap
+	//list CacheList
+}
+
+func (c *Cache) Init() {
+	c.hash = CacheMap{}
+}
+
+func (c *Cache) Get(key string) (val float64, exists bool) {
+	item, exists := c.hash[key]
+
+	if exists {
+		val = item.Answer
+
+		now := time.Now()
+		fmt.Printf("Age: %fs\n", float32(now.Sub(item.Time))/float32(time.Second))
+		item.Time = now
+	}
+
+	return
+}
+
+func (c *Cache) Set(key string, value float64) {
+	now := time.Now()
+
+	c.hash[key] = &CacheEntry{value, now}
+}
+
+func (c *Cache) Delete(key string) {
+	delete(c.hash, key)
+}
+
+func (c *Cache) Cleanup() {
+	now := time.Now()
+	expireTime := now.Add(time.Second * -60)
+
+	// TODO: use a linked list to make c cleanup an O(1) operation
+	fmt.Println("\ncache:")
+	for key, value := range c.hash {
+		deleteIt := false
+		if value.Time.Before(expireTime) {
+			deleteIt = true
+			c.Delete(key)
+		}
+
+		fmt.Println(key, value, deleteIt)
+	}
+}
+
+var cache Cache
 
 func getXY(r *http.Request) (float64, float64, error) {
 	r.ParseForm()
@@ -66,28 +116,13 @@ func doMath(w http.ResponseWriter, r *http.Request) {
 	reqString := fmt.Sprintf("%s;%v;%v", op, x, y)
 
 	var answer float64
-	now := time.Now()
 
-	expireTime := now.Add(time.Second * -60)
+	cache.Cleanup()
 
-	// TODO: use a linked list to make cache cleanup an O(1) operation
-	fmt.Println("\ncache:")
-	for key, value := range cache {
-		deleteIt := false
-		if value.Time.Before(expireTime) {
-			deleteIt = true
-			delete(cache, key)
-		}
-
-		fmt.Println(key, value, deleteIt)
-	}
-
-	cacheItem, exists := cache[reqString]
+	cacheAnswer, exists := cache.Get(reqString)
 
 	if exists {
-		answer = cacheItem.Answer
-		fmt.Printf("Age: %fs\n", float32(now.Sub(cacheItem.Time)) / float32(time.Second))
-		cacheItem.Time = now
+		answer = cacheAnswer
 	} else {
 
 		switch op {
@@ -101,7 +136,7 @@ func doMath(w http.ResponseWriter, r *http.Request) {
 			answer = x / y
 		}
 
-		cache[reqString] = &CacheEntry{answer, now}
+		cache.Set(reqString, answer)
 	}
 
 	data := Response{
@@ -124,7 +159,8 @@ func doMath(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	cache = CacheMap{}
+	cache = Cache{}
+	cache.Init()
 	fmt.Println("Running web server on port 8080")
 
 	http.HandleFunc("/add", doMath)
