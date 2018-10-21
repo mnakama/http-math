@@ -20,7 +20,7 @@ type Response struct {
 
 type CacheEntry struct {
 	Answer float64
-	Time time.Time
+	Time   time.Time
 }
 
 // Must be a pointer to CacheEntry, or the CacheEntry will be unaddressable.
