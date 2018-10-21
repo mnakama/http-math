@@ -123,7 +123,7 @@ func getXY(r *http.Request) (float64, float64, error) {
 	}
 	x, err := strconv.ParseFloat(form_x[0], 64)
 	if err != nil {
-		return 0, 0, fmt.Errorf("x is not an integer: %v", form_x[0])
+		return 0, 0, fmt.Errorf("x is not a number: %v", form_x[0])
 	}
 
 	form_y, ok := r.Form["y"]
@@ -132,7 +132,7 @@ func getXY(r *http.Request) (float64, float64, error) {
 	}
 	y, err := strconv.ParseFloat(form_y[0], 64)
 	if err != nil {
-		return 0, 0, fmt.Errorf("y is not an integer: %v", form_y[0])
+		return 0, 0, fmt.Errorf("y is not a number: %v", form_y[0])
 	}
 
 	return x, y, nil
