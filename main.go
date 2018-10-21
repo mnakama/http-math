@@ -4,12 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	//"html"
+	"container/list"
 	"net/http"
 	"strconv"
 	"time"
 )
 
+// JSON data for responding to client
 type Response struct {
 	Action string  `json:"action"`
 	X      float64 `json:"x"`
@@ -19,8 +20,11 @@ type Response struct {
 }
 
 type CacheEntry struct {
+	Key    string
 	Answer float64
 	Time   time.Time
+
+	element *list.Element
 }
 
 // Must be a pointer to CacheEntry, or the CacheEntry will be unaddressable.
@@ -29,12 +33,17 @@ type CacheEntry struct {
 type CacheMap map[string]*CacheEntry
 
 type Cache struct {
-	hash CacheMap
-	//list CacheList
+	hash CacheMap  // used for quick lookups; key by question string
+	list list.List // used for quick cleanup; ordered by age
 }
+
+const cacheExpireSeconds = 60
+
+var cache Cache
 
 func (c *Cache) Init() {
 	c.hash = CacheMap{}
+	c.list.Init()
 }
 
 func (c *Cache) Get(key string) (val float64, exists bool) {
@@ -45,7 +54,11 @@ func (c *Cache) Get(key string) (val float64, exists bool) {
 
 		now := time.Now()
 		fmt.Printf("Age: %fs\n", float32(now.Sub(item.Time))/float32(time.Second))
+
+		// update timestamp
 		item.Time = now
+		// move to the back of the list
+		c.list.MoveToBack(item.element)
 	}
 
 	return
@@ -54,31 +67,53 @@ func (c *Cache) Get(key string) (val float64, exists bool) {
 func (c *Cache) Set(key string, value float64) {
 	now := time.Now()
 
-	c.hash[key] = &CacheEntry{value, now}
-}
-
-func (c *Cache) Delete(key string) {
-	delete(c.hash, key)
+	entry := &CacheEntry{key, value, now, nil}
+	c.hash[key] = entry
+	element := c.list.PushBack(entry)
+	entry.element = element
 }
 
 func (c *Cache) Cleanup() {
 	now := time.Now()
-	expireTime := now.Add(time.Second * -60)
+	expireTime := now.Add(time.Second * -cacheExpireSeconds)
 
-	// TODO: use a linked list to make c cleanup an O(1) operation
-	fmt.Println("\ncache:")
+	// Debug
+	// Print out entire hash and whether things are expired
+	/*fmt.Println("\n\n\ncache.hash:")
 	for key, value := range c.hash {
 		deleteIt := false
 		if value.Time.Before(expireTime) {
 			deleteIt = true
-			c.Delete(key)
 		}
 
 		fmt.Println(key, value, deleteIt)
+	}*/
+
+	// Iterate through list. Remove all expired items at the front, and stop
+	// when we reach the first non-expired item.
+	fmt.Printf("\ncache.list (%d):\n", c.list.Len())
+	var next *list.Element
+	for e := c.list.Front(); e != nil; e = next {
+		next = e.Next() // store Next() because we might remove this element
+		deleteIt := false
+
+		value := e.Value.(*CacheEntry)
+		if value.Time.Before(expireTime) {
+			deleteIt = true
+
+			c.list.Remove(e)
+			delete(c.hash, value.Key)
+		}
+
+		fmt.Println(value, deleteIt)
+
+		// Stop iteration if we passed the expired items
+		// disable this to print the whole cache for debugging
+		if !deleteIt {
+			break
+		}
 	}
 }
-
-var cache Cache
 
 func getXY(r *http.Request) (float64, float64, error) {
 	r.ParseForm()
@@ -113,6 +148,10 @@ func doMath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Make a question string. This ensures that the map will have a unique
+	// and hashable key for each question. Originally, I used r.URL as the
+	// key, but it would make duplicate cache entries if x and y were swapped
+	// in the query string, or if extra data was added to the query.
 	reqString := fmt.Sprintf("%s;%v;%v", op, x, y)
 
 	var answer float64
