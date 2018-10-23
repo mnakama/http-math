@@ -3,7 +3,6 @@ package main
 import (
 	"container/list"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -98,24 +97,29 @@ func (c *cacheStruct) cleanup() {
 	}
 }
 
-func getXY(r *http.Request) (float64, float64, error) {
-	r.ParseForm()
-	form_x := r.FormValue("x")
-	if form_x == "" {
-		return 0, 0, errors.New("x is undefined")
-	}
-	x, err := strconv.ParseFloat(form_x, 64)
-	if err != nil {
-		return 0, 0, fmt.Errorf("x is not a number: %v", form_x)
+func getFormFloat(r *http.Request, name string) (float64, error) {
+	strVal := r.FormValue(name)
+	if strVal == "" {
+		return 0, fmt.Errorf("%s is undefined", name)
 	}
 
-	form_y := r.FormValue("y")
-	if form_y == "" {
-		return 0, 0, errors.New("y is undefined")
-	}
-	y, err := strconv.ParseFloat(form_y, 64)
+	val, err := strconv.ParseFloat(strVal, 64)
 	if err != nil {
-		return 0, 0, fmt.Errorf("y is not a number: %v", form_y)
+		return 0, fmt.Errorf("%s is not a number: %v", name, strVal)
+	}
+
+	return val, nil
+}
+
+func getXY(r *http.Request) (float64, float64, error) {
+	x, err := getFormFloat(r, "x")
+	if err != nil {
+		return 0, 0, err
+	}
+
+	y, err := getFormFloat(r, "y")
+	if err != nil {
+		return 0, 0, err
 	}
 
 	return x, y, nil
