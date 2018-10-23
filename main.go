@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -33,8 +34,9 @@ type cacheEntry struct {
 type cacheMap map[string]*cacheEntry
 
 type cacheStruct struct {
-	hash cacheMap  // used for quick lookups; key by question string
-	list list.List // used for quick cleanup; ordered by age
+	hash  cacheMap  // used for quick lookups; key by question string
+	list  list.List // used for quick cleanup; ordered by age
+	mutex sync.Mutex
 }
 
 const cacheExpireSeconds = 60
@@ -47,6 +49,14 @@ func newCache() *cacheStruct {
 	c.list.Init()
 
 	return c
+}
+
+func (c *cacheStruct) lock() {
+	c.mutex.Lock()
+}
+
+func (c *cacheStruct) unlock() {
+	c.mutex.Unlock()
 }
 
 func (c *cacheStruct) get(key string) (float64, bool) {
@@ -126,15 +136,10 @@ func getXY(r *http.Request) (float64, float64, error) {
 	return x, y, nil
 }
 
-func doMath(w http.ResponseWriter, r *http.Request) {
-	op := r.URL.Path[1:]
-
-	x, y, err := getXY(r)
-	if err != nil {
-		httpFail(w, err)
-		return
-	}
-
+// I split this into its own function to reduce the time that the mutex lock
+// is held, since defer only executes when we leave the function. Normally,
+// I would use a with: block or a try/finally in python.
+func getAnswer(op string, x float64, y float64) (float64, bool, error) {
 	// Make a question string. This ensures that the map will have a unique
 	// and hashable key for each question. Originally, I used r.URL as the
 	// key, but it would make duplicate cache entries if x and y were swapped
@@ -142,6 +147,9 @@ func doMath(w http.ResponseWriter, r *http.Request) {
 	reqString := fmt.Sprintf("%s;%v;%v", op, x, y)
 
 	var answer float64
+
+	cache.lock()
+	defer cache.unlock()
 
 	cache.cleanup()
 
@@ -164,24 +172,42 @@ func doMath(w http.ResponseWriter, r *http.Request) {
 			// but JSON cannot handle Inf, so we check here to provide a nicer
 			// error message.
 			if y == 0 {
-				httpFail(w, errors.New("Cannot divide by zero"))
-				return
+				return 0, false, errors.New("Cannot divide by zero")
 			}
 
 			answer = x / y
-		case "":
-			fmt.Fprintln(w, "Usage: curl http://localhost:8080/{OP}?x={X}&y={Y}\n"+
-				"\n"+
-				"OP: operation (add, subtract, multiply, divide\n"+
-				"X, Y: parameters")
-
-			return
 		default:
-			httpFail(w, fmt.Errorf("Invalid operation: %s", op))
-			return
+			return 0, false, fmt.Errorf("Invalid operation: %s", op)
 		}
 
 		cache.set(reqString, answer)
+	}
+
+	return answer, exists, nil
+}
+
+func doMath(w http.ResponseWriter, r *http.Request) {
+	op := r.URL.Path[1:]
+
+	if op == "" {
+		fmt.Fprintln(w, "Usage: curl http://localhost:8080/{OP}?x={X}&y={Y}\n"+
+			"\n"+
+			"OP: operation (add, subtract, multiply, divide\n"+
+			"X, Y: parameters")
+
+		return
+	}
+
+	x, y, err := getXY(r)
+	if err != nil {
+		httpFail(w, err)
+		return
+	}
+
+	answer, cached, err := getAnswer(op, x, y)
+	if err != nil {
+		httpFail(w, err)
+		return
 	}
 
 	data := response{
@@ -189,7 +215,7 @@ func doMath(w http.ResponseWriter, r *http.Request) {
 		X:      x,
 		Y:      y,
 		Answer: answer,
-		Cached: exists,
+		Cached: cached,
 	}
 
 	ret, err := json.Marshal(data)
@@ -203,7 +229,7 @@ func doMath(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "%s", ret)
 }
 
-func httpFail(w http.ResponseWriter, err interface{ Error() string }) {
+func httpFail(w http.ResponseWriter, err error) {
 	http.Error(w, err.Error(), http.StatusInternalServerError)
 	fmt.Printf("Error: %v\n", err)
 }
