@@ -3,6 +3,7 @@ package main
 import (
 	"container/list"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -130,8 +131,7 @@ func doMath(w http.ResponseWriter, r *http.Request) {
 
 	x, y, err := getXY(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		fmt.Printf("Error: %v\n", err)
+		httpFail(w, err)
 		return
 	}
 
@@ -160,8 +160,18 @@ func doMath(w http.ResponseWriter, r *http.Request) {
 		case "multiply":
 			answer = x * y
 		case "divide":
-			// Floating point division is not subject to divide-by-zero error
+			// Floating point division is not subject to divide-by-zero error,
+			// but JSON cannot handle Inf, so we check here to provide a nicer
+			// error message.
+			if y == 0 {
+				httpFail(w, errors.New("Cannot divide by zero"))
+				return
+			}
+
 			answer = x / y
+		default:
+			httpFail(w, fmt.Errorf("Invalid operation: %s", op))
+			return
 		}
 
 		cache.set(reqString, answer)
@@ -177,13 +187,18 @@ func doMath(w http.ResponseWriter, r *http.Request) {
 
 	ret, err := json.Marshal(data)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		fmt.Printf("Error: %v\n", err)
+		httpFail(w, err)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 
 	fmt.Fprintf(w, "%s", ret)
+}
+
+func httpFail(w http.ResponseWriter, err interface{ Error() string }) {
+	http.Error(w, err.Error(), http.StatusInternalServerError)
+	fmt.Printf("Error: %v\n", err)
 }
 
 func main() {
