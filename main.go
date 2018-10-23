@@ -177,7 +177,7 @@ func doMath(w http.ResponseWriter, r *http.Request) {
 
 	ret, err := json.Marshal(data)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		fmt.Printf("Error: %v\n", err)
 	}
 
