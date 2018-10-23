@@ -1,10 +1,10 @@
 package main
 
 import (
+	"container/list"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"container/list"
 	"net/http"
 	"strconv"
 	"time"
@@ -39,14 +39,18 @@ type Cache struct {
 
 const cacheExpireSeconds = 60
 
-var cache Cache
+var cache *Cache
 
-func (c *Cache) Init() {
+func newCache() *Cache {
+	c := &Cache{}
 	c.hash = CacheMap{}
 	c.list.Init()
+
+	return c
 }
 
-func (c *Cache) Get(key string) (val float64, exists bool) {
+func (c *Cache) Get(key string) (float64, bool) {
+	var val float64
 	item, exists := c.hash[key]
 
 	if exists {
@@ -61,7 +65,7 @@ func (c *Cache) Get(key string) (val float64, exists bool) {
 		c.list.MoveToBack(item.element)
 	}
 
-	return
+	return val, exists
 }
 
 func (c *Cache) Set(key string, value float64) {
@@ -77,39 +81,18 @@ func (c *Cache) Cleanup() {
 	now := time.Now()
 	expireTime := now.Add(time.Second * -cacheExpireSeconds)
 
-	// Debug
-	// Print out entire hash and whether things are expired
-	/*fmt.Println("\n\n\ncache.hash:")
-	for key, value := range c.hash {
-		deleteIt := false
-		if value.Time.Before(expireTime) {
-			deleteIt = true
-		}
-
-		fmt.Println(key, value, deleteIt)
-	}*/
-
 	// Iterate through list. Remove all expired items at the front, and stop
 	// when we reach the first non-expired item.
 	fmt.Printf("\ncache.list (%d):\n", c.list.Len())
 	var next *list.Element
 	for e := c.list.Front(); e != nil; e = next {
 		next = e.Next() // store Next() because we might remove this element
-		deleteIt := false
 
 		value := e.Value.(*CacheEntry)
 		if value.Time.Before(expireTime) {
-			deleteIt = true
-
 			c.list.Remove(e)
 			delete(c.hash, value.Key)
-		}
-
-		fmt.Println(value, deleteIt)
-
-		// Stop iteration if we passed the expired items
-		// disable this to print the whole cache for debugging
-		if !deleteIt {
+		} else {
 			break
 		}
 	}
@@ -117,22 +100,22 @@ func (c *Cache) Cleanup() {
 
 func getXY(r *http.Request) (float64, float64, error) {
 	r.ParseForm()
-	form_x, ok := r.Form["x"]
-	if !ok {
+	form_x := r.FormValue("x")
+	if form_x == "" {
 		return 0, 0, errors.New("x is undefined")
 	}
-	x, err := strconv.ParseFloat(form_x[0], 64)
+	x, err := strconv.ParseFloat(form_x, 64)
 	if err != nil {
-		return 0, 0, fmt.Errorf("x is not a number: %v", form_x[0])
+		return 0, 0, fmt.Errorf("x is not a number: %v", form_x)
 	}
 
-	form_y, ok := r.Form["y"]
-	if !ok {
+	form_y := r.FormValue("y")
+	if form_y == "" {
 		return 0, 0, errors.New("y is undefined")
 	}
-	y, err := strconv.ParseFloat(form_y[0], 64)
+	y, err := strconv.ParseFloat(form_y, 64)
 	if err != nil {
-		return 0, 0, fmt.Errorf("y is not a number: %v", form_y[0])
+		return 0, 0, fmt.Errorf("y is not a number: %v", form_y)
 	}
 
 	return x, y, nil
@@ -143,7 +126,7 @@ func doMath(w http.ResponseWriter, r *http.Request) {
 
 	x, y, err := getXY(r)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		fmt.Printf("Error: %v\n", err)
 		return
 	}
@@ -164,6 +147,7 @@ func doMath(w http.ResponseWriter, r *http.Request) {
 		answer = cacheAnswer
 	} else {
 
+		// Note: invalid operations won't be passed to doMath
 		switch op {
 		case "add":
 			answer = x + y
@@ -172,6 +156,7 @@ func doMath(w http.ResponseWriter, r *http.Request) {
 		case "multiply":
 			answer = x * y
 		case "divide":
+			// Floating point division is not subject to divide-by-zero error
 			answer = x / y
 		}
 
@@ -198,10 +183,10 @@ func doMath(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	cache = Cache{}
-	cache.Init()
+	cache = newCache()
 	fmt.Println("Running web server on port 8080")
 
+	// Only allow valid operations to be sent to doMath
 	http.HandleFunc("/add", doMath)
 	http.HandleFunc("/subtract", doMath)
 	http.HandleFunc("/multiply", doMath)
