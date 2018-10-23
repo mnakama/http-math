@@ -11,7 +11,7 @@ import (
 )
 
 // JSON data for responding to client
-type Response struct {
+type response struct {
 	Action string  `json:"action"`
 	X      float64 `json:"x"`
 	Y      float64 `json:"y"`
@@ -19,48 +19,48 @@ type Response struct {
 	Cached bool    `json:"cached"`
 }
 
-type CacheEntry struct {
-	Key    string
-	Answer float64
-	Time   time.Time
+type cacheEntry struct {
+	key    string
+	answer float64
+	time   time.Time
 
 	element *list.Element
 }
 
-// Must be a pointer to CacheEntry, or the CacheEntry will be unaddressable.
+// Must be a pointer to cacheEntry, or the cacheEntry will be unaddressable.
 // And if it's unaddressable, then the timestamp can't be updated without
-// assigning a new CacheEntry to the map's key.
-type CacheMap map[string]*CacheEntry
+// assigning a new cacheEntry to the map's key.
+type cacheMap map[string]*cacheEntry
 
-type Cache struct {
-	hash CacheMap  // used for quick lookups; key by question string
+type cacheStruct struct {
+	hash cacheMap  // used for quick lookups; key by question string
 	list list.List // used for quick cleanup; ordered by age
 }
 
 const cacheExpireSeconds = 60
 
-var cache *Cache
+var cache *cacheStruct
 
-func newCache() *Cache {
-	c := &Cache{}
-	c.hash = CacheMap{}
+func newCache() *cacheStruct {
+	c := &cacheStruct{}
+	c.hash = cacheMap{}
 	c.list.Init()
 
 	return c
 }
 
-func (c *Cache) Get(key string) (float64, bool) {
+func (c *cacheStruct) get(key string) (float64, bool) {
 	var val float64
 	item, exists := c.hash[key]
 
 	if exists {
-		val = item.Answer
+		val = item.answer
 
 		now := time.Now()
-		fmt.Printf("Age: %fs\n", float32(now.Sub(item.Time))/float32(time.Second))
+		fmt.Printf("Age: %fs\n", float32(now.Sub(item.time))/float32(time.Second))
 
 		// update timestamp
-		item.Time = now
+		item.time = now
 		// move to the back of the list
 		c.list.MoveToBack(item.element)
 	}
@@ -68,16 +68,16 @@ func (c *Cache) Get(key string) (float64, bool) {
 	return val, exists
 }
 
-func (c *Cache) Set(key string, value float64) {
+func (c *cacheStruct) set(key string, value float64) {
 	now := time.Now()
 
-	entry := &CacheEntry{key, value, now, nil}
+	entry := &cacheEntry{key, value, now, nil}
 	c.hash[key] = entry
 	element := c.list.PushBack(entry)
 	entry.element = element
 }
 
-func (c *Cache) Cleanup() {
+func (c *cacheStruct) cleanup() {
 	now := time.Now()
 	expireTime := now.Add(time.Second * -cacheExpireSeconds)
 
@@ -88,10 +88,10 @@ func (c *Cache) Cleanup() {
 	for e := c.list.Front(); e != nil; e = next {
 		next = e.Next() // store Next() because we might remove this element
 
-		value := e.Value.(*CacheEntry)
-		if value.Time.Before(expireTime) {
+		value := e.Value.(*cacheEntry)
+		if value.time.Before(expireTime) {
 			c.list.Remove(e)
-			delete(c.hash, value.Key)
+			delete(c.hash, value.key)
 		} else {
 			break
 		}
@@ -139,9 +139,9 @@ func doMath(w http.ResponseWriter, r *http.Request) {
 
 	var answer float64
 
-	cache.Cleanup()
+	cache.cleanup()
 
-	cacheAnswer, exists := cache.Get(reqString)
+	cacheAnswer, exists := cache.get(reqString)
 
 	if exists {
 		answer = cacheAnswer
@@ -160,10 +160,10 @@ func doMath(w http.ResponseWriter, r *http.Request) {
 			answer = x / y
 		}
 
-		cache.Set(reqString, answer)
+		cache.set(reqString, answer)
 	}
 
-	data := Response{
+	data := response{
 		Action: op,
 		X:      x,
 		Y:      y,
