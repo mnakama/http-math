@@ -169,6 +169,13 @@ func doMath(w http.ResponseWriter, r *http.Request) {
 			}
 
 			answer = x / y
+		case "":
+			fmt.Fprintln(w, "Usage: curl http://localhost:8080/{OP}?x={X}&y={Y}\n"+
+				"\n"+
+				"OP: operation (add, subtract, multiply, divide\n"+
+				"X, Y: parameters")
+
+			return
 		default:
 			httpFail(w, fmt.Errorf("Invalid operation: %s", op))
 			return
@@ -206,10 +213,7 @@ func main() {
 	fmt.Println("Running web server on port 8080")
 
 	// Only allow valid operations to be sent to doMath
-	http.HandleFunc("/add", doMath)
-	http.HandleFunc("/subtract", doMath)
-	http.HandleFunc("/multiply", doMath)
-	http.HandleFunc("/divide", doMath)
+	http.HandleFunc("/", doMath)
 
 	err := http.ListenAndServe(":8080", nil)
 	fmt.Printf("Error: %v", err)
