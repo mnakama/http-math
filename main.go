@@ -1,7 +1,6 @@
 package main
 
 import (
-	"container/list"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,8 +23,6 @@ type cacheEntry struct {
 	key    string
 	answer float64
 	time   time.Time
-
-	element *list.Element
 }
 
 // Must be a pointer to cacheEntry, or the cacheEntry will be unaddressable.
@@ -34,45 +31,51 @@ type cacheEntry struct {
 type cacheMap map[string]*cacheEntry
 
 type cacheStruct struct {
-	hash  cacheMap  // used for quick lookups; key by question string
-	list  list.List // used for quick cleanup; ordered by age
-	mutex sync.Mutex
+	hash  cacheMap // used for quick lookups; key by question string
+	mutex sync.RWMutex
 }
 
 const cacheExpireSeconds = 60
+const cacheCleanupInterval = 10
 
 var cache *cacheStruct
 
 func newCache() *cacheStruct {
 	c := &cacheStruct{}
 	c.hash = cacheMap{}
-	c.list.Init()
+
+	go c.cleaner()
 
 	return c
 }
 
-func (c *cacheStruct) lock() {
-	c.mutex.Lock()
-}
-
-func (c *cacheStruct) unlock() {
-	c.mutex.Unlock()
-}
-
 func (c *cacheStruct) get(key string) (float64, bool) {
 	var val float64
+
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
 	item, exists := c.hash[key]
 
 	if exists {
 		val = item.answer
 
 		now := time.Now()
+		expireTime := now.Add(time.Second * -cacheExpireSeconds)
+
 		fmt.Printf("Age: %fs\n", float32(now.Sub(item.time))/float32(time.Second))
 
-		// update timestamp
+		if item.time.Before(expireTime) {
+			// expired
+
+			// We do not delete it from the cache now, because that would require
+			// a write lock, which would delay the return of this function and
+			// block all concurrent read access to the cache. Let the periodic
+			// cleaner do it.
+			return 0, false
+		}
+
+		// not expired; update timestamp
 		item.time = now
-		// move to the back of the list
-		c.list.MoveToBack(item.element)
 	}
 
 	return val, exists
@@ -81,30 +84,37 @@ func (c *cacheStruct) get(key string) (float64, bool) {
 func (c *cacheStruct) set(key string, value float64) {
 	now := time.Now()
 
-	entry := &cacheEntry{key, value, now, nil}
+	entry := &cacheEntry{key, value, now}
+
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
 	c.hash[key] = entry
-	element := c.list.PushBack(entry)
-	entry.element = element
 }
 
 func (c *cacheStruct) cleanup() {
 	now := time.Now()
 	expireTime := now.Add(time.Second * -cacheExpireSeconds)
 
-	// Iterate through list. Remove all expired items at the front, and stop
-	// when we reach the first non-expired item.
-	fmt.Printf("\ncache.list (%d):\n", c.list.Len())
-	var next *list.Element
-	for e := c.list.Front(); e != nil; e = next {
-		next = e.Next() // store Next() because we might remove this element
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
 
-		value := e.Value.(*cacheEntry)
+	fmt.Printf("Cache size: %d\n", len(c.hash))
+	for key, value := range c.hash {
 		if value.time.Before(expireTime) {
-			c.list.Remove(e)
-			delete(c.hash, value.key)
-		} else {
-			break
+			fmt.Printf("Expired: %v\n", key)
+			delete(c.hash, key)
 		}
+	}
+}
+
+// runs in a separate goroutine
+func (c *cacheStruct) cleaner() {
+	for {
+		time.Sleep(time.Second * cacheCleanupInterval)
+		fmt.Println("c.cleanup()")
+
+		c.cleanup()
 	}
 }
 
@@ -136,9 +146,6 @@ func getXY(r *http.Request) (float64, float64, error) {
 	return x, y, nil
 }
 
-// I split this into its own function to reduce the time that the mutex lock
-// is held, since defer only executes when we leave the function. Normally,
-// I would use a with: block or a try/finally in python.
 func getAnswer(op string, x float64, y float64) (float64, bool, error) {
 	// Make a question string. This ensures that the map will have a unique
 	// and hashable key for each question. Originally, I used r.URL as the
@@ -147,11 +154,6 @@ func getAnswer(op string, x float64, y float64) (float64, bool, error) {
 	reqString := fmt.Sprintf("%s;%v;%v", op, x, y)
 
 	var answer float64
-
-	cache.lock()
-	defer cache.unlock()
-
-	cache.cleanup()
 
 	cacheAnswer, exists := cache.get(reqString)
 
