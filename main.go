@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"sync"
@@ -62,7 +63,7 @@ func (c *cacheStruct) get(key string) (float64, bool) {
 		now := time.Now()
 		expireTime := now.Add(time.Second * -cacheExpireSeconds)
 
-		fmt.Printf("Age: %fs\n", float32(now.Sub(item.time))/float32(time.Second))
+		log.Printf("Age: %fs\n", float32(now.Sub(item.time))/float32(time.Second))
 
 		if item.time.Before(expireTime) {
 			// expired
@@ -99,10 +100,10 @@ func (c *cacheStruct) cleanup() {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	fmt.Printf("Cache size: %d\n", len(c.hash))
+	log.Printf("Cache size: %d\n", len(c.hash))
 	for key, value := range c.hash {
 		if value.time.Before(expireTime) {
-			fmt.Printf("Expired: %v\n", key)
+			log.Printf("Expired: %v\n", key)
 			delete(c.hash, key)
 		}
 	}
@@ -112,8 +113,6 @@ func (c *cacheStruct) cleanup() {
 func (c *cacheStruct) cleaner() {
 	for {
 		time.Sleep(time.Second * cacheCleanupInterval)
-		fmt.Println("c.cleanup()")
-
 		c.cleanup()
 	}
 }
@@ -233,16 +232,16 @@ func doMath(w http.ResponseWriter, r *http.Request) {
 
 func httpFail(w http.ResponseWriter, err error) {
 	http.Error(w, err.Error(), http.StatusInternalServerError)
-	fmt.Printf("Error: %v\n", err)
+	log.Printf("Error: %v\n", err)
 }
 
 func main() {
 	cache = newCache()
-	fmt.Println("Running web server on port 8080")
+	log.Println("Running web server on port 8080")
 
 	// Only allow valid operations to be sent to doMath
 	http.HandleFunc("/", doMath)
 
 	err := http.ListenAndServe(":8080", nil)
-	fmt.Printf("Error: %v", err)
+	log.Printf("Error: %v", err)
 }
