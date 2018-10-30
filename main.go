@@ -93,19 +93,37 @@ func (c *cacheStruct) set(key string, value float64) {
 	c.hash[key] = entry
 }
 
+func (c *cacheStruct) removeKeys(expList []string) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	for _, key := range(expList) {
+		delete(c.hash, key)
+	}
+}
+
 func (c *cacheStruct) cleanup() {
 	now := time.Now()
 	expireTime := now.Add(time.Second * -cacheExpireSeconds)
 
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
+	// list of things to delete
+	expList := make([]string, 5)
+
+	// only obtain a RLock for now
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
 
 	log.Printf("Cache size: %d\n", len(c.hash))
 	for key, value := range c.hash {
 		if value.time.Before(expireTime) {
 			log.Printf("Expired: %v\n", key)
-			delete(c.hash, key)
+			expList = append(expList, key)
 		}
+	}
+
+	if len(expList) > 1 {
+		// do actual cleanup in a separate goroutine while holding a write Lock.
+		go c.removeKeys(expList)
 	}
 }
 
